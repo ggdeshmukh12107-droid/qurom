@@ -54,7 +54,6 @@ import {
 // is a workspace sibling that is not published, so its bare name does not resolve.
 import { type QuorumPrivateState } from '../../../contract/src/index';
 import { inMemoryPrivateStateProvider } from '../in-memory-private-state-provider';
-import { NetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 /** A poll deployment that is being deployed or joined. */
@@ -244,7 +243,7 @@ export class BrowserDeployedPollManager implements DeployedPollAPIProvider {
 }
 /** @internal */
 const initializeProviders = async (logger: Logger): Promise<QuorumProviders> => {
-  const networkId = import.meta.env.VITE_NETWORK_ID as NetworkId;
+  const networkId = import.meta.env.VITE_NETWORK_ID;
   const connectedAPI = await connectToWallet(logger, networkId);
   const zkConfigPath = window.location.origin;
   const keyMaterialProvider = new FetchZkConfigProvider<QuorumCircuitKeys>(zkConfigPath, fetch.bind(window));

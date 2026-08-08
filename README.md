@@ -1,277 +1,263 @@
-# Bulletin Board DApp
+# Quorum
 
-This project is built on the [Midnight Network](https://midnight.network/).
+**Anonymous one-person-one-vote polling on Midnight.** The tally is public and
+verifiable on-chain. The voters are not.
 
-[![Generic badge](https://img.shields.io/badge/Compact%20Compiler-0.30.0-1abc9c.svg)](https://shields.io/)
-[![Generic badge](https://img.shields.io/badge/TypeScript-5.9.3-blue.svg)](https://shields.io/)
+[![Compact Compiler](https://img.shields.io/badge/Compact%20Compiler-0.31.1-1abc9c.svg)](https://shields.io/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9.3-blue.svg)](https://shields.io/)
+[![Network](https://img.shields.io/badge/deployed-Preview-8e44ad.svg)](https://shields.io/)
 
+## The idea
 
-> **Use this repo as a template. Do not fork it.**
->  
-> This repository is intended to be used via GitHub’s “Use this template” flow.  
-> Forking this repo is discouraged, as forks are not tracked as independent projects.
+Ask a group something they will only answer honestly if nobody can tell who said
+what — *should we move to a four-day week?*, *do you trust this roadmap?*, *is
+this proposal worth funding?* — and you hit a dilemma. Anonymous polls are easy
+to stuff. Verified polls attach a name to every answer, and the moment a name is
+attached, some people stop telling the truth.
 
-A Midnight smart contract example demonstrating a simple one-item bulletin board with zero-knowledge proofs on testnet. Users can post a single message at a time, and only the message author can remove it.
+Quorum removes the tradeoff. An organizer opens a question. Anyone holding a
+secret key votes exactly once. The running Yes/No tally is public and anyone can
+audit it, but nothing on-chain links a vote to a voter.
 
-## Project Structure
+The chain enforces one-person-one-vote **without ever learning who voted**. Each
+voter proves in zero knowledge that they hold a secret key whose *nullifier* — a
+one-way, domain-separated hash of that key — is not already in the published
+set. The proof convinces the network the vote is unique. It reveals nothing that
+would identify the voter.
+
+The proof is generated on the voter's own machine, and a second vote is rejected
+*there*, before any transaction is built or broadcast. Nobody has to be trusted
+with the link between voter and vote, because nobody is ever told it.
+
+## Deployed contract
+
+Live on the Midnight **Preview** testnet:
 
 ```
-bulletin-board/
-├── contract/               # Smart contract in Compact language
-│   └── src/               # Contract source and utilities
-├── api/                   # Methods, classes and types for CLI and UI
-├── bboard-cli/            # Command-line interface
-│   └── src/               # CLI implementation
-└── bboard-ui/             # Web browser interface
-    └── src/               # Web UI implementation
+8d8397ab0d8013f834837e365a905fa1e5de0ca0aec8265bed37b34d522e7f97
+```
+
+Deployed in transaction
+`d3b148963f514a1849cde4f8380d12c108240a32d32d0597e54a9254a9f2a981`, block
+`328602`. This queries the public Preview indexer directly and depends on nothing
+in this repo:
+
+```bash
+curl -s https://indexer.preview.midnight.network/api/v4/graphql -H 'content-type: application/json' -d '{"query":"{ contractAction(address: \"8d8397ab0d8013f834837e365a905fa1e5de0ca0aec8265bed37b34d522e7f97\") { address transaction { hash block { height } } } }"}'
+```
+
+Full deployment transcript: [`docs/deploy-output.txt`](docs/deploy-output.txt).
+Compiler output listing the four circuits:
+[`docs/compile-output.txt`](docs/compile-output.txt).
+
+## Public state vs private witness
+
+Every public value is published by an explicit `disclose()` in
+[`contract/src/quorum.compact`](contract/src/quorum.compact). Compact refuses to
+let a witness value reach public state without one, so the disclosure surface is
+exactly these five calls and nothing else.
+
+| Value | On chain | How |
+|---|---|---|
+| The question | yes | `disclose(some(newQuestion))` — [`quorum.compact:56`](contract/src/quorum.compact#L56). Everyone must see what is asked. |
+| Yes / No totals | yes | Counter increments — [`:76`](contract/src/quorum.compact#L76), [`:78`](contract/src/quorum.compact#L78). The tally is the product. |
+| That *a* vote was Yes | yes | `disclose(choice)` — [`:75`](contract/src/quorum.compact#L75). Selects which counter moves. |
+| The nullifier set | yes | `disclose(voteNullifier(...))` — [`:71`](contract/src/quorum.compact#L71). Opaque by construction. |
+| Organizer's derived key | yes | `disclose(organizerKey(...))` — [`:55`](contract/src/quorum.compact#L55). A commitment, not a name. |
+| **The voter's secret key** | **never** | `witness localSecretKey()` — never passed to `disclose()` in any circuit. |
+| **Which way a given voter voted** | **never** | `choice` moves a global counter; it is never stored per voter. |
+| **The link between voter and vote** | **never** | Not derivable — the nullifier is a one-way hash. |
+
+The two derivations at
+[`quorum.compact:108-114`](contract/src/quorum.compact#L108-L114) are
+domain-separated — `"quorum:org:"` and `"quorum:nul:"` — so one secret key
+produces two unrelated values in its two roles. An organizer's derived key cannot
+be linked to their own vote nullifier, even though both come from that key.
+
+The private state itself lives in
+[`contract/src/witnesses.ts`](contract/src/witnesses.ts) and holds one field: a
+32-byte secret key generated locally. In the browser it is held by an in-memory
+provider only ([`quorum-ui/src/in-memory-private-state-provider.ts`](quorum-ui/src/in-memory-private-state-provider.ts)) — closing the tab
+forgets it, and so does disconnecting the wallet.
+
+## The privacy claim, and its limit
+
+**Claimed:** an observer with the full chain history can compute the exact tally
+and the exact number of distinct voters, and cannot determine which way any
+identified person voted, or whether a given person voted at all.
+
+That claim holds because the only per-voter value published is
+`persistentHash(["quorum:nul:", round, sk])`. Recovering `sk` from it means
+inverting the hash. Linking it to a voter means already knowing their `sk` —
+which is exactly the secret the scheme protects.
+
+**Not claimed — a real limitation, stated plainly:** the nullifier is *not* bound
+to the contract address. The same secret key therefore produces the same
+nullifier in every Quorum poll at the same round number. An observer watching two
+different Quorum deployments can tell that *the same anonymous person* voted in
+both. They still learn no identity and no vote direction, but that cross-poll
+correlation is real and it is a weakness. Binding `kernel.self()` into the hash
+would close it; that is the obvious next change, deliberately left out of this
+version rather than papered over.
+
+Note also that `reset()` rotates every nullifier by bumping `round`. That is what
+makes a contract reusable for a series of polls — and it means the anonymity set
+is per-round, not per-lifetime.
+
+## The behaviour to look for
+
+**Vote once, then try to vote again.**
+
+The second attempt fails during local proof generation with `failed assert: You
+have already voted in this poll` — and no transaction is ever submitted. Nothing
+is sent to the network, so nothing about the second attempt is recorded anywhere.
+The chain was never asked, and was never told who you are.
+
+Both frontends make this visible. The UI's privacy panel shows your own nullifier
+in hex next to the on-chain set, so you can confirm by eye that the value that
+landed on-chain is the one your key derives — the same check the circuit does, but
+where you can see it. The Yes/No buttons then disable with *"already counted"*.
+
+The CLI shows the same thing as a transcript; the recorded run is in
+[`docs/deploy-output.txt`](docs/deploy-output.txt), which ends with the public
+ledger state (`yes votes: 1, no votes: 0, round: 1, nullifiers: 1`) printed next
+to the nullifier only a holder of the secret key could have computed.
+
+## Project structure
+
+```
+quorum/
+├── contract/          # The Compact contract, witnesses, and simulator tests
+│   └── src/managed/   # Committed build output: circuits, prover/verifier keys
+├── api/               # Shared types and the QuorumAPI used by both frontends
+├── quorum-cli/        # Terminal client; also the deployment tool
+├── quorum-ui/         # Browser dApp with Lace wallet integration
+└── docs/              # Compile and deploy transcripts
 ```
 
 ## Prerequisites
 
-### 1. Node.js Version Check
+The Compact toolchain does not support Windows natively, and the build scripts
+use POSIX tools. On Windows, run everything inside WSL2.
 
-You need Node.js:
+| Requirement | Version | Check |
+|---|---|---|
+| Node.js | `24.11.1`+ (pinned in [`.nvmrc`](.nvmrc)) | `node --version` |
+| Docker | any recent | `docker --version` |
+| Compact | compiler `0.31.1` | `compact compile --version` |
+| Lace wallet | for the UI only | browser extension |
 
-```bash
-node --version
-```
-
-Expected output: `v24.11.1` or higher. The repository includes an [.nvmrc](./.nvmrc) pinned to `24.11.1`.
-
-If you get a lower version: [Install Node.js LTS](https://nodejs.org/).
-
-### 2. Docker Installation
-
-The [proof server](https://docs.midnight.network/develop/tutorial/using/proof-server) runs in Docker and is required for both CLI and UI to generate zero-knowledge proofs:
+Install the Compact toolchain:
 
 ```bash
-docker --version
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+compact update
 ```
 
-Expected output: `Docker version X.X.X`.
+Get the Lace extension from the
+[Chrome Store](https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk)
+or the [Edge Store](https://microsoftedge.microsoft.com/addons/detail/lace/efeiemlfnahiidnjglmehaihacglceia).
 
-If Docker is not found: [Install Docker Desktop](https://docs.docker.com/desktop/). Make sure Docker Desktop is running.
-
-### 3. Lace Wallet Extension (UI Only)
-
-For the web interface, install the official Lace wallet extension on [Chrome Store](https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk) or the [Edge Store](https://microsoftedge.microsoft.com/addons/detail/lace/efeiemlfnahiidnjglmehaihacglceia) (tested with version 1.36.0).
-
-After installing, set up the Midnight wallet:
-
-1. Create a **new wallet** — Midnight will appear as a network option
-2. Set **Network** to **Preprod**
-3. Set **Proof server** to **Local (http://localhost:6300)** — this must point to your local proof server started via Docker
-4. Click **Enter Wallet**
-5. Fund your wallet with tNIGHT tokens from the [Preprod Faucet](https://midnight-tmnight-preprod.nethermind.dev/)
-6. Go to **Tokens** in the wallet, click **Generate tDUST**, and confirm the transaction — tDUST tokens are required to pay transaction fees on preprod
-
-## Setup Instructions
-
-### Install Project Dependencies
+## Setup
 
 ```bash
 npm install
 ```
 
-This repository uses npm workspaces. Run installation once from the repository root.
-
-### Compile the Smart Contract
-
-The Compact compiler (`compactc 0.31.0`) generates TypeScript bindings and zero-knowledge circuits from the smart contract source code:
+Compile the contract. This writes `contract/src/managed/quorum/` — the four
+circuits plus their proving and verifying keys — which the CLI and UI both load
+at runtime:
 
 ```bash
-cd contract
-npm run compact    # Compiles the Compact contract
-npm run build      # Copies compiled files to dist/
-cd ..
+cd contract && npm run compact
 ```
 
-Expected output:
-
-```
-> compact
-> compact compile src/bboard.compact ./src/managed/bboard
-
-Compiling 2 circuits:
-  circuit "post" (k=14, rows=10070)
-  circuit "takeDown" (k=14, rows=10087)
-
-> build
-> rm -rf dist && tsc --project tsconfig.build.json && cp -Rf ./src/managed ./dist/managed && cp ./src/bboard.compact ./dist
-
-```
-
-### Build the CLI Interface
+Run the test suite:
 
 ```bash
-cd bboard-cli
-npm run build
-cd ..
+cd contract && npm test
 ```
 
-### Build the UI Interface (Optional)
-
-Only needed if you want to use the web interface:
+Start the proof server. Use the pinned compose file rather than the `latest` tag:
+the SDK here is pinned to 4.1.1, and a moving proof-server tag fails at proof
+generation, which is a bad place to find out:
 
 ```bash
-cd bboard-ui
-npm run build
-cd ..
+cd quorum-cli && docker compose -f proof-server-local.yml up -d
 ```
 
-## Option 1: CLI Interface
-
-### Start the Proof Server
-
-The CLI requires a local proof server running in Docker:
+### Run the browser dApp
 
 ```bash
-cd bboard-cli
-docker compose -f proof-server-local.yml up -d
+cd quorum-ui && npm run build:start:preview
 ```
 
-This uses `midnightntwrk/proof-server:8.0.3` on `http://127.0.0.1:6300`.
+Open the printed URL, click **Connect Lace**, and either join the deployed poll
+above (offered as a one-click button) or deploy your own.
 
 ### Run the CLI
 
 ```bash
-# For preprod network
-npm run preprod-remote
-
-# For preview network
-npm run preview-remote
+cd quorum-cli && npm run preview-remote
 ```
 
-### Using the CLI
-
-#### Create a Wallet
-
-1. Choose option `1` to build a fresh wallet
-2. The system will generate a wallet address and seed
-3. **Save both the address and seed** - you'll need them later
-
-Expected output is similar to:
-
-```
-Your wallet seed is: [64-character hex string]
-Using unshielded address: mn_addr_preprod1hdvtst70zfgd8wvh7l8ppp7mcrxnjn56wc5hlxpwflz3fxdykaesrw0ln4 waiting for funds...
-```
-
-#### Fund Your Wallet
-
-Before deploying contracts, you need testnet tokens.
-
-1. Copy your wallet address from the output above
-2. Visit the [faucet](https://midnight-tmnight-preprod.nethermind.dev/)
-3. Paste your address and request funds
-4. Wait for the CLI to detect the funds (takes 2-3 minutes)
-
-Expected output after funding is similar to:
-
-```
-Your NIGHT wallet balance is: 1000000000
-```
-
-#### Deploy Your Contract
-
-1. Choose the contract deployment option
-2. Wait for deployment (takes ~30 seconds)
-3. **Save the contract address** for future use
-
-Expected output:
-
-```
-Deployed bulletin board contract at address: [contract address]
-```
-
-#### Use the Bulletin Board
-
-You can now:
-
-- **Post** a message to the bulletin board
-- **View** the current message
-- **Remove** your message (only if you posted it)
-- **Exit** when done
-
-Each action creates a real transaction on Midnight Testnet using zero-knowledge proofs generated by the proof server.
-
-## Option 2: Web UI Interface
-
-The web interface uses the same proof server and requires additional browser setup.
-
-### Start the Proof Server (if not already running)
-
-If you haven't started the proof server for the CLI, start it now:
+### Deploy your own contract
 
 ```bash
-cd bboard-cli
-docker compose -f proof-server-local.yml up -d
-cd ..
+cd quorum-cli && npm run new-wallet -- preview   # prints an address to fund
 ```
 
-Verify it's running:
+Fund that address with tNIGHT from the
+[Midnight faucet](https://midnight.network/test-faucet), then:
 
 ```bash
-docker ps
+cd quorum-cli && npm run deploy-preview
 ```
 
-### Start the Web Interface
+Fees on Midnight are paid in DUST, not NIGHT, and DUST only accrues from NIGHT
+that has been *registered* to generate it. The deploy script handles the
+registration — including the fact that the registration transaction must itself
+be paid for out of dust the registration has not formally unlocked yet — but the
+first run on a fresh wallet takes several minutes while that dust accrues. The
+log reports the balance as it climbs.
 
-The UI can run against preprod or preview networks:
+## Wallet safety
 
-```bash
-cd bboard-ui
-
-# For preprod network
-npm run build:start
-
-# For preview network
-npm run build:start:preview
-```
-
-The UI will be available at:
-
-- http://127.0.0.1:8080
-
-### Browser Setup
-
-1. **Open the UI URL** in a browser with Lace wallet extension installed
-2. **Set up Lace wallet** if it's your first time
-3. **Authorize the application** when Lace wallet prompts
-4. Use the bulletin board web interface
-
-## Useful Links
-
-- Get Testnet tNIGHT on [Preprod Faucet](https://midnight-tmnight-preprod.nethermind.dev/) or [Preview Faucet](https://midnight-tmnight-preview.nethermind.dev/)
-- [Midnight Documentation](https://docs.midnight.network/examples/dapps/bboard) - Complete developer guide
-- [Compatibility Matrix](https://docs.midnight.network/relnotes/support-matrix) - Current supported Midnight component versions
-- [Compact Language Guide](https://docs.midnight.network/compact/writing) - Smart contract language reference
-- Get Lace wallet on the [Chrome Store](https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk) or the [Edge Store](https://microsoftedge.microsoft.com/addons/detail/lace/efeiemlfnahiidnjglmehaihacglceia)
+`.wallet-seed.local` holds the deployment wallet's master seed. It is a private
+key: it is gitignored, and nothing in `docs/` contains it. The Midnight SDK logs
+the seed at INFO level, so every script that captures output filters it before
+anything reaches a file or the terminal. If you generate your own wallet, keep
+that seed out of screenshots and commits.
 
 ## Troubleshooting
 
-| Common Issue                       | Solution                                                                                                  |
-| ---------------------------------- |-----------------------------------------------------------------------------------------------------------|
-| `npm install` fails                | Ensure you're using Node `v24.11.1` or newer. Older Node versions can install with warnings but are not the target runtime |
-| Contract compilation fails         | Ensure the Compact toolchain is installed and run `npm run compact` from `contract/`                      |
-| Network connection timeout         | CLI requires internet connection, restart if connection times out                                         |
-| Token funding takes too long       | Wait 1-2 minutes, funding is automatic in CLI                                                             |
-| "Application not authorized" error | Start proof server: `docker compose -f proof-server-local.yml up -d`                                      |
-| Lace wallet not detected           | Install Lace wallet browser extension and refresh page                                                    |
-| Docker issues                      | Ensure Docker Desktop is running, check `docker --version`                                                |
-| Port 6300 in use                   | Run `docker compose down` then restart services                                                           |
-| Dependencies won't install         | Use Node.js LTS version. For older npm versions, you may need `--legacy-peer-deps`                        |
-| Contract deployment fails          | Verify wallet has sufficient balance and network connection                                               |
+| Issue | Fix |
+|---|---|
+| `compact` not found | Re-run the installer, then `compact update`; open a new shell |
+| Compilation fails | Run `npm run compact` from `contract/`, not the repo root |
+| `Application is not authorized` | Start the proof server from `quorum-cli/`: `docker compose -f proof-server-local.yml up -d` |
+| Lace not detected | Install the extension, then refresh the page |
+| Deploy sits at `Waiting for dust` | Expected on a fresh wallet; registration takes minutes. It errors out rather than hanging if it truly fails |
+| `Insufficient Funds: could not balance dust` | The wallet has NIGHT but not enough DUST yet. Wait and re-run |
+| Port 6300 in use | `docker compose down`, then bring the proof server back up |
+| `npm install` warnings on old Node | Use Node `24.11.1`+; older versions install but are not the target runtime |
 
-## Notes
+## Further reading
 
-- CLI and UI can run simultaneously and share the same proof server
-- Proof server (Docker) is required for both CLI and UI to generate zero-knowledge proofs
-- Contract must be compiled before building CLI or UI
-- Fund your wallet using the testnet faucet before deploying contracts
+- [Midnight documentation](https://docs.midnight.network/)
+- [Compact language guide](https://docs.midnight.network/compact/writing)
+- [Proof server](https://docs.midnight.network/develop/tutorial/using/proof-server)
 
-## Implementation Notes
+## Implementation notes
 
-- **Transaction fee configuration**  
-  The default `additionalFeeOverhead` value (`500_000_000_000_000_000n`) from `@midnight-ntwrk/testkit-js` is required on the `undeployed` network. Lower values can fail with `BalanceCheckOverspend` on the node side. On remote networks, that overhead requires too much dust, so the CLI overrides it to `1_000n`.
-- CLI private state is stored per contract address, matching the `Midnight.js 4.x` private-state provider model.
+- **Transaction fee overhead.** The `additionalFeeOverhead` default from
+  `@midnight-ntwrk/testkit-js` (`500_000_000_000_000_000n`) is required on the
+  `undeployed` network — lower values fail with `BalanceCheckOverspend` on the
+  node. On remote networks that overhead demands far too much dust, so the CLI
+  overrides it to `1_000n`.
+- **Private state scoping.** CLI private state is stored per contract address,
+  matching the Midnight.js 4.x private-state provider model.
+- **Attribution.** Built on the
+  [example-bboard](https://github.com/midnightntwrk/example-bboard) scaffold. The
+  workspace layout, provider wiring and wallet plumbing come from there; the
+  contract, its tests, the API surface and the poll UI are original to Quorum.
