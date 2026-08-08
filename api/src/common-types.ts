@@ -1,30 +1,15 @@
-// This file is part of midnightntwrk/example-bboard.
-// Copyright (C) Midnight Foundation
-// SPDX-License-Identifier: Apache-2.0
-// Licensed under the Apache License, Version 2.0 (the "License");
-// You may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 /**
- * Bulletin board common types and abstractions.
+ * Quorum common types and abstractions.
  *
  * @module
  */
 
 import { type MidnightProviders } from '@midnight-ntwrk/midnight-js-types';
 import { type FoundContract } from '@midnight-ntwrk/midnight-js-contracts';
-import type { State, BBoardPrivateState, Contract, Witnesses } from '../../contract/src/index';
+import type { PollState, QuorumPrivateState, Contract, Witnesses } from '../../contract/src/index';
 
-export const bboardPrivateStateKey = 'bboardPrivateState';
-export type PrivateStateId = typeof bboardPrivateStateKey;
+export const quorumPrivateStateKey = 'quorumPrivateState';
+export type PrivateStateId = typeof quorumPrivateStateKey;
 
 /**
  * The private states consumed throughout the application.
@@ -37,63 +22,93 @@ export type PrivateStateId = typeof bboardPrivateStateKey;
  * and the type (i.e., `typeof PrivateStates[K]`) represents the type of private state
  * expected to be returned.
  *
- * Since there is only one contract type for the bulletin board example, we only define a
- * single key/type in the schema.
+ * Quorum has a single contract type, so the schema has a single key.
  *
  * @public
  */
 export type PrivateStates = {
   /**
-   * Key used to provide the private state for {@link BBoardContract} deployments.
+   * Key used to provide the private state for {@link QuorumContract} deployments.
    */
-  readonly bboardPrivateState: BBoardPrivateState;
+  readonly quorumPrivateState: QuorumPrivateState;
 };
 
 /**
- * Represents a bulletin board contract and its private state.
+ * Represents a Quorum contract and its private state.
  *
  * @public
  */
-export type BBoardContract = Contract<BBoardPrivateState, Witnesses<BBoardPrivateState>>;
+export type QuorumContract = Contract<QuorumPrivateState, Witnesses<QuorumPrivateState>>;
 
 /**
- * The keys of the circuits exported from {@link BBoardContract}.
+ * The keys of the circuits exported from {@link QuorumContract}.
  *
  * @public
  */
-export type BBoardCircuitKeys = Exclude<keyof BBoardContract['impureCircuits'], number | symbol>;
+export type QuorumCircuitKeys = Exclude<keyof QuorumContract['impureCircuits'], number | symbol>;
 
 /**
- * The providers required by {@link BBoardContract}.
+ * The providers required by {@link QuorumContract}.
  *
  * @public
  */
-export type BBoardProviders = MidnightProviders<BBoardCircuitKeys, PrivateStateId, BBoardPrivateState>;
+export type QuorumProviders = MidnightProviders<QuorumCircuitKeys, PrivateStateId, QuorumPrivateState>;
 
 /**
- * A {@link BBoardContract} that has been deployed to the network.
+ * A {@link QuorumContract} that has been deployed to the network.
  *
  * @public
  */
-export type DeployedBBoardContract = FoundContract<BBoardContract>;
+export type DeployedQuorumContract = FoundContract<QuorumContract>;
 
 /**
- * A type that represents the derived combination of public (or ledger), and private state.
+ * The derived combination of public (ledger) and private state.
+ *
+ * @remarks
+ * Everything up to `nullifierCount` is read straight off the ledger, and is
+ * public to anyone with the contract address. The final three fields are
+ * derived locally by combining the ledger with the user's secret key — they
+ * are answers the chain itself cannot give, because it never learns the key.
  */
-export type BBoardDerivedState = {
-  readonly state: State;
-  readonly sequence: bigint;
-  readonly message: string | undefined;
+export type QuorumDerivedState = {
+  readonly state: PollState;
+  readonly question: string | undefined;
+  readonly yesVotes: bigint;
+  readonly noVotes: bigint;
+  readonly round: bigint;
 
   /**
-   * A readonly flag that determines if the current message was posted by the current user.
+   * How many distinct people have voted this round.
    *
    * @remarks
-   * The `owner` property of the public (or ledger) state is the public key of the message owner, while
-   * the `secretKey` property of {@link BBoardPrivateState} is the secret key of the current user. If
-   * `owner` corresponds to the public key derived from `secretKey`, then `isOwner` is `true`.
+   * This is the size of the on-chain nullifier set. It is the total the chain
+   * can prove; it cannot name any of the individuals it counts.
    */
-  readonly isOwner: boolean;
-};
+  readonly nullifierCount: bigint;
 
-// TODO: for some reason I needed to include "@midnight-ntwrk/wallet-sdk-address-format": "1.0.0-rc.1", should we bump in to rc-2 ?
+  /**
+   * This user's nullifier for the current round, as hex.
+   *
+   * @remarks
+   * Derived locally from the secret key. Displaying it is safe — it is a
+   * one-way hash — and it is what makes the privacy claim observable: the same
+   * value is visible in the on-chain set once the user votes, and it changes
+   * completely when the round advances.
+   */
+  readonly myNullifier: string;
+
+  /**
+   * Whether this user has already voted in the current round.
+   *
+   * @remarks
+   * Computed by checking the locally derived nullifier against the on-chain
+   * set. Only the holder of the secret key can compute this, which is why the
+   * UI can show "you have voted" while the chain cannot.
+   */
+  readonly hasVoted: boolean;
+
+  /**
+   * Whether this user opened the current poll.
+   */
+  readonly isOrganizer: boolean;
+};

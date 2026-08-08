@@ -1,77 +1,54 @@
-// This file is part of midnightntwrk/example-bboard.
-// Copyright (C) Midnight Foundation
-// SPDX-License-Identifier: Apache-2.0
-// Licensed under the Apache License, Version 2.0 (the "License");
-// You may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 /**
- * Provides types and utilities for working with bulletin board contracts.
+ * Provides types and utilities for working with Quorum polling contracts.
  *
  * @packageDocumentation
  */
 
-import * as BBoard from '../../contract/src/managed/bboard/contract/index.js';
+import * as Quorum from '../../contract/src/managed/quorum/contract/index.js';
 
 import { type ContractAddress, convertFieldToBytes } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import { type Logger } from 'pino';
 import {
-  type BBoardDerivedState,
-  type BBoardContract,
-  type BBoardProviders,
-  type DeployedBBoardContract,
-  bboardPrivateStateKey,
+  type QuorumDerivedState,
+  type QuorumContract,
+  type QuorumProviders,
+  type DeployedQuorumContract,
+  quorumPrivateStateKey,
 } from './common-types.js';
-import { CompiledBBoardContractContract } from '../../contract/src/index';
+import { CompiledQuorumContractContract } from '../../contract/src/index';
 import * as utils from './utils/index.js';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { combineLatest, map, tap, from, type Observable } from 'rxjs';
 import { toHex } from '@midnight-ntwrk/midnight-js-utils';
-import { BBoardPrivateState, createBBoardPrivateState } from '../../contract/src/witnesses.js';
-
-/** @internal */
+import { QuorumPrivateState, createQuorumPrivateState } from '../../contract/src/witnesses.js';
 
 /**
- * An API for a deployed bulletin board.
+ * An API for a deployed Quorum poll.
  */
-export interface DeployedBBoardAPI {
+export interface DeployedQuorumAPI {
   readonly deployedContractAddress: ContractAddress;
-  readonly state$: Observable<BBoardDerivedState>;
+  readonly state$: Observable<QuorumDerivedState>;
 
-  post: (message: string) => Promise<void>;
-  takeDown: () => Promise<void>;
+  open: (question: string) => Promise<void>;
+  vote: (choice: boolean) => Promise<void>;
+  close: () => Promise<void>;
+  reset: () => Promise<void>;
 }
 
 /**
- * Provides an implementation of {@link DeployedBBoardAPI} by adapting a deployed bulletin board
- * contract.
+ * Implements {@link DeployedQuorumAPI} by adapting a deployed Quorum contract.
  *
  * @remarks
- * The `BBoardPrivateState` is managed at the DApp level by a private state provider. As such, this
- * private state is shared between all instances of {@link BBoardAPI}, and their underlying deployed
- * contracts. The private state defines a `'secretKey'` property that effectively identifies the current
- * user, and is used to determine if the current user is the owner of the message as the observable
- * contract state changes.
- *
- * In the future, Midnight.js will provide a private state provider that supports private state storage
- * keyed by contract address. This will remove the current workaround of sharing private state across
- * the deployed bulletin board contracts, and allows for a unique secret key to be generated for each bulletin
- * board that the user interacts with.
+ * The `QuorumPrivateState` is managed at the DApp level by a private state
+ * provider, and holds the single value that must never leave the browser: the
+ * user's secret key. It identifies the user for both roles — deriving their
+ * vote nullifier and their organizer key — without ever being transmitted.
  */
-// TODO: Update BBoardAPI to use contract level private state storage.
-export class BBoardAPI implements DeployedBBoardAPI {
+export class QuorumAPI implements DeployedQuorumAPI {
   /** @internal */
   private constructor(
-    public readonly deployedContract: DeployedBBoardContract,
-    providers: BBoardProviders,
+    public readonly deployedContract: DeployedQuorumContract,
+    providers: QuorumProviders,
     private readonly logger?: Logger,
   ) {
     this.deployedContractAddress = deployedContract.deployTxData.public.contractAddress;
@@ -80,37 +57,49 @@ export class BBoardAPI implements DeployedBBoardAPI {
       [
         // Combine public (ledger) state with...
         providers.publicDataProvider.contractStateObservable(this.deployedContractAddress, { type: 'latest' }).pipe(
-          map((contractState) => BBoard.ledger(contractState.data)),
+          map((contractState) => Quorum.ledger(contractState.data)),
           tap((ledgerState) =>
             logger?.trace({
               ledgerStateChanged: {
                 ledgerState: {
-                  ...ledgerState,
-                  state: ledgerState.state === BBoard.State.OCCUPIED ? 'occupied' : 'vacant',
-                  owner: toHex(ledgerState.owner),
+                  state: pollStateLabel(ledgerState.state),
+                  question: ledgerState.question.value,
+                  yesVotes: ledgerState.yesVotes,
+                  noVotes: ledgerState.noVotes,
+                  round: ledgerState.round,
+                  nullifierCount: ledgerState.nullifiers.size(),
+                  organizer: toHex(ledgerState.organizer),
                 },
               },
             }),
           ),
         ),
-        // ...private state...
-        //    since the private state of the bulletin board application never changes, we can query the
-        //    private state once and always use the same value with `combineLatest`. In applications
-        //    where the private state is expected to change, we would need to make this an `Observable`.
-        from(providers.privateStateProvider.get(bboardPrivateStateKey) as Promise<BBoardPrivateState>),
+        // ...private state.
+        //    Quorum's private state never changes after creation, so a single
+        //    query suffices. If it could change, this would need to be an
+        //    Observable.
+        from(providers.privateStateProvider.get(quorumPrivateStateKey) as Promise<QuorumPrivateState>),
       ],
-      // ...and combine them to produce the required derived state.
+      // ...and derive the view state from both.
       (ledgerState, privateState) => {
-        const hashedSecretKey = BBoard.pureCircuits.publicKey(
-          privateState.secretKey,
-          convertFieldToBytes(32, ledgerState.sequence, 'api/src/index.ts'),
-        );
+        // Both derivations happen locally, in this process. The secret key is
+        // an input to the pure circuits and never leaves: what comes back is a
+        // one-way hash. This is precisely why `hasVoted` and `isOrganizer` can
+        // be answered here but not by the chain.
+        const round = convertFieldToBytes(32, ledgerState.round, 'api/src/index.ts');
+        const myNullifier = Quorum.pureCircuits.voteNullifier(privateState.secretKey, round);
+        const myOrganizerKey = Quorum.pureCircuits.organizerKey(privateState.secretKey, round);
 
         return {
           state: ledgerState.state,
-          message: ledgerState.message.value,
-          sequence: ledgerState.sequence,
-          isOwner: toHex(ledgerState.owner) === toHex(hashedSecretKey),
+          question: ledgerState.question.is_some ? ledgerState.question.value : undefined,
+          yesVotes: ledgerState.yesVotes,
+          noVotes: ledgerState.noVotes,
+          round: ledgerState.round,
+          nullifierCount: ledgerState.nullifiers.size(),
+          myNullifier: toHex(myNullifier),
+          hasVoted: ledgerState.nullifiers.member(myNullifier),
+          isOrganizer: toHex(ledgerState.organizer) === toHex(myOrganizerKey),
         };
       },
     );
@@ -122,27 +111,25 @@ export class BBoardAPI implements DeployedBBoardAPI {
   readonly deployedContractAddress: ContractAddress;
 
   /**
-   * Gets an observable stream of state changes based on the current public (ledger),
-   * and private state data.
+   * Gets an observable stream of state changes based on the current public
+   * (ledger), and private state data.
    */
-  readonly state$: Observable<BBoardDerivedState>;
+  readonly state$: Observable<QuorumDerivedState>;
 
   /**
-   * Attempts to post a given message to the bulletin board.
-   *
-   * @param message The message to post.
+   * Opens a new poll with the given question, making the caller its organizer.
    *
    * @remarks
-   * This method can fail during local circuit execution if the bulletin board is currently occupied.
+   * Fails during local circuit execution if a poll is already open.
    */
-  async post(message: string): Promise<void> {
-    this.logger?.info(`postingMessage: ${message}`);
+  async open(question: string): Promise<void> {
+    this.logger?.info(`openingPoll: ${question}`);
 
-    const txData = await this.deployedContract.callTx.post(message);
+    const txData = await this.deployedContract.callTx.open(question);
 
     this.logger?.trace({
       transactionAdded: {
-        circuit: 'post',
+        circuit: 'open',
         txHash: txData.public.txHash,
         blockHeight: txData.public.blockHeight,
       },
@@ -150,21 +137,29 @@ export class BBoardAPI implements DeployedBBoardAPI {
   }
 
   /**
-   * Attempts to take down any currently posted message on the bulletin board.
+   * Casts a vote in the current poll.
+   *
+   * @param choice `true` for Yes, `false` for No.
    *
    * @remarks
-   * This method can fail during local circuit execution if the bulletin board is currently vacant,
-   * or if the currently posted message isn't owned by the owner computed from the current private
-   * state.
+   * Fails during local circuit execution — before any transaction is built or
+   * submitted — if no poll is open, or if this user's nullifier is already in
+   * the on-chain set. A rejected double vote therefore costs nothing and
+   * reveals nothing: no transaction ever reaches the network.
+   *
+   * Note what is *not* logged below. The tx hash and block height are public
+   * anyway, but `choice` is deliberately omitted: writing it to the DApp's own
+   * logs would reconstruct, off-chain, exactly the voter-to-vote link the
+   * contract is designed to withhold.
    */
-  async takeDown(): Promise<void> {
-    this.logger?.info('takingDownMessage');
+  async vote(choice: boolean): Promise<void> {
+    this.logger?.info('castingVote');
 
-    const txData = await this.deployedContract.callTx.takeDown();
+    const txData = await this.deployedContract.callTx.vote(choice);
 
     this.logger?.trace({
       transactionAdded: {
-        circuit: 'takeDown',
+        circuit: 'vote',
         txHash: txData.public.txHash,
         blockHeight: txData.public.blockHeight,
       },
@@ -172,72 +167,122 @@ export class BBoardAPI implements DeployedBBoardAPI {
   }
 
   /**
-   * Deploys a new bulletin board contract to the network.
+   * Closes the current poll, freezing the tally.
    *
-   * @param providers The bulletin board providers.
+   * @remarks
+   * Fails during local circuit execution if no poll is open, or if this user
+   * is not the organizer that opened it.
+   */
+  async close(): Promise<void> {
+    this.logger?.info('closingPoll');
+
+    const txData = await this.deployedContract.callTx.close();
+
+    this.logger?.trace({
+      transactionAdded: {
+        circuit: 'close',
+        txHash: txData.public.txHash,
+        blockHeight: txData.public.blockHeight,
+      },
+    });
+  }
+
+  /**
+   * Clears the poll and advances the round, making everyone eligible again.
+   *
+   * @remarks
+   * Organizer only, and only once the poll is closed.
+   */
+  async reset(): Promise<void> {
+    this.logger?.info('resettingPoll');
+
+    const txData = await this.deployedContract.callTx.reset();
+
+    this.logger?.trace({
+      transactionAdded: {
+        circuit: 'reset',
+        txHash: txData.public.txHash,
+        blockHeight: txData.public.blockHeight,
+      },
+    });
+  }
+
+  /**
+   * Deploys a new Quorum contract to the network.
+   *
+   * @param providers The Quorum providers.
    * @param logger An optional 'pino' logger to use for logging.
-   * @returns A `Promise` that resolves with a {@link BBoardAPI} instance that manages the newly deployed
-   * {@link DeployedBBoardContract}; or rejects with a deployment error.
+   * @returns A `Promise` that resolves with a {@link QuorumAPI} instance that
+   * manages the newly deployed {@link DeployedQuorumContract}; or rejects with
+   * a deployment error.
    */
-  static async deploy(providers: BBoardProviders, logger?: Logger): Promise<BBoardAPI> {
+  static async deploy(providers: QuorumProviders, logger?: Logger): Promise<QuorumAPI> {
     logger?.info('deployContract');
 
-    const deployedBBoardContract = await deployContract(providers, {
-      compiledContract: CompiledBBoardContractContract,
-      privateStateId: bboardPrivateStateKey,
-      initialPrivateState: createBBoardPrivateState(utils.randomBytes(32)),
+    const deployedQuorumContract = await deployContract(providers, {
+      compiledContract: CompiledQuorumContractContract,
+      privateStateId: quorumPrivateStateKey,
+      initialPrivateState: createQuorumPrivateState(utils.randomBytes(32)),
     });
 
     logger?.trace({
       contractDeployed: {
-        finalizedDeployTxData: deployedBBoardContract.deployTxData.public,
+        finalizedDeployTxData: deployedQuorumContract.deployTxData.public,
       },
     });
 
-    return new BBoardAPI(deployedBBoardContract, providers, logger);
+    return new QuorumAPI(deployedQuorumContract, providers, logger);
   }
 
   /**
-   * Finds an already deployed bulletin board contract on the network, and joins it.
+   * Finds an already deployed Quorum contract on the network, and joins it.
    *
-   * @param providers The bulletin board providers.
-   * @param contractAddress The contract address of the deployed bulletin board contract to search for and join.
+   * @param providers The Quorum providers.
+   * @param contractAddress The contract address of the deployed Quorum contract to join.
    * @param logger An optional 'pino' logger to use for logging.
-   * @returns A `Promise` that resolves with a {@link BBoardAPI} instance that manages the joined
-   * {@link DeployedBBoardContract}; or rejects with an error.
+   * @returns A `Promise` that resolves with a {@link QuorumAPI} instance that
+   * manages the joined {@link DeployedQuorumContract}; or rejects with an error.
    */
-  static async join(providers: BBoardProviders, contractAddress: ContractAddress, logger?: Logger): Promise<BBoardAPI> {
+  static async join(providers: QuorumProviders, contractAddress: ContractAddress, logger?: Logger): Promise<QuorumAPI> {
     logger?.info({
       joinContract: {
         contractAddress,
       },
     });
 
-    const deployedBBoardContract = await findDeployedContract<BBoardContract>(providers, {
+    const deployedQuorumContract = await findDeployedContract<QuorumContract>(providers, {
       contractAddress,
-      compiledContract: CompiledBBoardContractContract,
-      privateStateId: bboardPrivateStateKey,
-      initialPrivateState: await BBoardAPI.getPrivateState(providers, contractAddress),
+      compiledContract: CompiledQuorumContractContract,
+      privateStateId: quorumPrivateStateKey,
+      initialPrivateState: await QuorumAPI.getPrivateState(providers, contractAddress),
     });
 
     logger?.trace({
       contractJoined: {
-        finalizedDeployTxData: deployedBBoardContract.deployTxData.public,
+        finalizedDeployTxData: deployedQuorumContract.deployTxData.public,
       },
     });
 
-    return new BBoardAPI(deployedBBoardContract, providers, logger);
+    return new QuorumAPI(deployedQuorumContract, providers, logger);
   }
 
+  /**
+   * Loads this user's private state, generating a fresh secret key on first
+   * use. A new key means a new nullifier, i.e. a distinct voting identity.
+   */
   private static async getPrivateState(
-    providers: BBoardProviders,
+    providers: QuorumProviders,
     contractAddress: ContractAddress,
-  ): Promise<BBoardPrivateState> {
+  ): Promise<QuorumPrivateState> {
     providers.privateStateProvider.setContractAddress(contractAddress);
-    const existingPrivateState = await providers.privateStateProvider.get(bboardPrivateStateKey);
-    return existingPrivateState ?? createBBoardPrivateState(utils.randomBytes(32));
+    const existingPrivateState = await providers.privateStateProvider.get(quorumPrivateStateKey);
+    return existingPrivateState ?? createQuorumPrivateState(utils.randomBytes(32));
   }
 }
+
+/** Human-readable poll state, for logs and CLI output. */
+export const pollStateLabel = (state: Quorum.PollState): string =>
+  state === Quorum.PollState.OPEN ? 'open' : state === Quorum.PollState.CLOSED ? 'closed' : 'draft';
 
 /**
  * A namespace that represents the exports from the `'utils'` sub-package.
