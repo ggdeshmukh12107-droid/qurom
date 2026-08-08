@@ -123,6 +123,20 @@ The CLI shows the same thing as a transcript; the recorded run is in
 ledger state (`yes votes: 1, no votes: 0, round: 1, nullifiers: 1`) printed next
 to the nullifier only a holder of the secret key could have computed.
 
+## The dApp
+
+![Quorum with no wallet connected: the poll card on black, and all three poll
+actions greyed out until a wallet is attached](docs/screenshots/ui-disconnected.png)
+
+The initial state, before a wallet is attached. Every poll action — join the live
+poll, deploy a new one, join one by address — is gated on the wallet, because all
+three need a key to sign with and `vote` additionally needs one to derive a
+nullifier from. `Connect Lace` in the header is the only thing you can press.
+
+Connecting reveals the poll question and tallies, and the privacy panel described
+above. A recorded run of the same circuits against Preview, including the
+second-vote rejection, is in [`docs/deploy-output.txt`](docs/deploy-output.txt).
+
 ## Project structure
 
 ```
@@ -132,7 +146,7 @@ quorum/
 ├── api/               # Shared types and the QuorumAPI used by both frontends
 ├── quorum-cli/        # Terminal client; also the deployment tool
 ├── quorum-ui/         # Browser dApp with Lace wallet integration
-└── docs/              # Compile and deploy transcripts
+└── docs/              # Compile and deploy transcripts, and screenshots
 ```
 
 ## Prerequisites
