@@ -1,0 +1,107 @@
+$ npm run deploy-preview
+
+(node:11156) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+--import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("ts-node/esm", pathToFileURL("./"));'
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11156) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+== Starting environment (this pulls up a proof server container) ==
+[11:10:44.460] [32mINFO[39m (11156): [36mStarting test environment... [39m
+[11:10:44.466] [32mINFO[39m (11156): [36mStarting proof server: path='/home/hp/midnight/quorum/quorum-cli', file=proof-server.yml, networkId=undefined, uid=8540680030339726[39m
+[11:11:04.707] [32mINFO[39m (11156): [36mTest environment configuration: {"walletNetworkId":"preview","networkId":"preview","indexer":"https://indexer.preview.midnight.network/api/v4/graphql","indexerWS":"wss://indexer.preview.midnight.network/api/v4/graphql/ws","node":"https://rpc.preview.midnight.network","nodeWS":"wss://rpc.preview.midnight.network","faucet":"https://midnight-tmnight-preview.nethermind.dev/","proofServer":"http://localhost:32779"}[39m
+[11:11:04.708] [32mINFO[39m (11156): [36mPerforming env health check[39m
+[11:11:05.298] [32mINFO[39m (11156): [36mConnected to node https://rpc.preview.midnight.network/health: {"peers":13,"isSyncing":false,"shouldHavePeers":true}[39m
+[11:11:05.838] [32mINFO[39m (11156): [36mConnected to indexer https://indexer.preview.midnight.network/ready: ""[39m
+[11:11:05.848] [32mINFO[39m (11156): [36mConnected to proof server http://localhost:32779/health: {"status":"ok","timestamp":"2026-08-08 11:11:05.844548356 +00:00:00"}[39m
+[11:11:06.231] [32mINFO[39m (11156): [36mConnected to faucet https://midnight-tmnight-preview.nethermind.dev/api/health: {"status":"SERVING","reason":null,"needsRestart":false}[39m
+   network:      preview
+   indexer:      https://indexer.preview.midnight.network/api/v4/graphql
+   node:         https://rpc.preview.midnight.network
+   proof server: http://localhost:32779
+
+== Wallet ==
+[11:11:06.235] [32mINFO[39m (11156): [36mInitializing wallet builder for preview[39m
+[11:11:06.525] [32mINFO[39m (11156): [36mCreating dust wallet with params: {"indexerClientConnection":{"indexerHttpUrl":"https://indexer.preview.midnight.network/api/v4/graphql","indexerWsUrl":"wss://indexer.preview.midnight.network/api/v4/graphql/ws"},"provingServerUrl":"http://localhost:32779/","networkId":"preview","relayURL":"wss://rpc.preview.midnight.network/","txHistoryStorage":{"storage":{}},"costParameters":{"ledgerParams":{"__wbg_ptr":4654560},"additionalFeeOverhead":"1000","feeBlocksMargin":5}}[39m
+[11:11:06.622] [32mINFO[39m (11156): [36mGetting initial state of wallet...[39m
+[11:11:06.657] [32mINFO[39m (11156): [36mStarting wallet...[39m
+[11:11:06.726] [32mINFO[39m (11156): [36mGetting initial state of wallet...[39m
+[11:11:06.743] [32mINFO[39m (11156): [36mUsing unshielded address: mn_addr_preview1nt24895cl2nu8c9lylaswmchptvhqsfsylcepg5pj7rzh2rerl5sqm8ucc waiting for funds...[39m
+[11:11:06.745] [32mINFO[39m (11156): [36mWallet is empty; requesting tokens from the faucet...[39m
+[11:11:06.746] [32mINFO[39m (11156): [36mRequesting tokens from 'https://midnight-tmnight-preview.nethermind.dev/' for address: 'mn_addr_preview1nt24895cl2nu8c9lylaswmchptvhqsfsylcepg5pj7rzh2rerl5sqm8ucc'[39m
+[11:11:07.033] [32mINFO[39m (11156): [36mFaucet response: OK[39m
+[11:11:07.033] [32mINFO[39m (11156): [36mYour wallet initial balance is: 0 (not yet initialized)[39m
+[11:11:07.034] [32mINFO[39m (11156): [36mWaiting to receive tokens...[39m
+[11:11:07.054] [32mINFO[39m (11156): [36mWaiting for funds: balance=0 shielded=false unshielded=false dust=false[39m
+[11:11:09.245] [32mINFO[39m (11156): [36mWaiting for funds: balance=10000000000 shielded=false unshielded=true dust=false[39m
+[11:11:09.246] [32mINFO[39m (11156): [36mFunds received - Unshielded: {"0000000000000000000000000000000000000000000000000000000000000000":"10000000000"}, Dust: 0[39m
+   NIGHT balance: 10000000000
+
+== Registering NIGHT for dust generation (pays the fees) ==
+[11:11:09.263] [32mINFO[39m (11156): [36mAll 2 NIGHT UTXO(s) are already registered for dust generation.[39m
+[11:11:09.271] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+2026-08-08 11:11:10        RPC-CORE: subscribeRuntimeVersion(): RuntimeVersion:: disconnected from wss://rpc.preview.midnight.network/: 1000:: Normal Closure
+2026-08-08 11:11:10        RPC-CORE: subscribeRuntimeVersion(): RuntimeVersion:: disconnected from wss://rpc.preview.midnight.network/: 1000:: Normal Closure
+[11:11:19.438] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:11:29.496] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:11:39.741] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:11:49.870] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:11:59.900] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:12:10.010] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:12:20.204] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:12:30.280] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:12:40.430] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:12:50.595] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:00.744] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:10.859] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:21.119] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:31.117] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:41.251] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:13:51.424] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:01.602] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:11.789] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:21.963] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:31.989] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:42.140] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:14:52.292] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:02.362] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:12.490] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:22.549] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:32.597] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:42.843] [32mINFO[39m (11156): [36mWaiting for dust: balance=0 target=1000000000[39m
+[11:15:52.931] [32mINFO[39m (11156): [36mWaiting for dust: balance=164761309999999999 target=1000000000[39m
+[11:15:52.933] [32mINFO[39m (11156): [36mDust available: 164761309999999999[39m
+
+== Deploying the Quorum contract ==
+[11:15:52.942] [32mINFO[39m (11156): [36mdeployContract[39m
+   CONTRACT ADDRESS: 8d8397ab0d8013f834837e365a905fa1e5de0ca0aec8265bed37b34d522e7f97
+
+== open("Should we move to a four-day week?") ==
+[11:16:15.962] [32mINFO[39m (11156): [36mopeningPoll: Should we move to a four-day week?[39m
+   poll opened
+
+== vote(yes) ==
+[11:16:46.008] [32mINFO[39m (11156): [36mcastingVote[39m
+   vote accepted
+
+== vote(yes) again, from the same identity ==
+[11:17:08.970] [32mINFO[39m (11156): [36mcastingVote[39m
+   rejected locally, no transaction submitted: Unexpected error executing scoped transaction '<unnamed>': Error: failed assert: You have already voted in this poll
+
+== Ledger state (what any observer can see) ==
+   question:   Should we move to a four-day week?
+   yes votes:  1
+   no votes:   0
+   round:      1
+   nullifiers: 1
+     - ca9cf8976fc92256ef0589a64861d1bac2ff45e38f18ebf46d276ddd4ba64eff
+   (the set above holds hashes, not identities — no entry names a voter)
+
+== Derived state (only this DApp instance can compute it) ==
+   my nullifier this round: ca9cf8976fc92256ef0589a64861d1bac2ff45e38f18ebf46d276ddd4ba64eff
+   have I voted?            yes
+   am I the organizer?      yes
+   these three need the secret key; an observer with the same ledger cannot derive them
+
+== Done ==
+Deployed Quorum contract address: 8d8397ab0d8013f834837e365a905fa1e5de0ca0aec8265bed37b34d522e7f97
+[11:17:12.852] [32mINFO[39m (11156): [36mShutting down test environment...[39m
