@@ -1,0 +1,114 @@
+// Quorum — anonymous one-person-one-vote polling.
+//
+// The tally is public and verifiable. The voters are not. The chain enforces
+// one-person-one-vote without ever learning who voted: each voter proves in
+// zero knowledge that they hold a secret key whose nullifier is not already in
+// the on-chain set, and only the nullifier — a one-way hash — is published.
+//
+// What the chain sees:      the question, the Yes/No totals, a set of opaque
+//                           nullifiers, the organizer's derived public key.
+// What the chain never sees: any voter's secret key, and which way any
+//                           individual voter voted.
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+export enum PollState {
+  DRAFT,
+  OPEN,
+  CLOSED
+}
+
+export ledger state: PollState;
+
+export ledger question: Maybe<Opaque<"string">>;
+
+export ledger yesVotes: Counter;
+
+export ledger noVotes: Counter;
+
+// One opaque nullifier per vote cast. Membership is what blocks a second vote;
+// the entries themselves reveal nothing about who cast them.
+export ledger nullifiers: Set<Bytes<32>>;
+
+// Derived public key of whoever opened the poll. Not an identity — just a
+// commitment to the organizer's secret key.
+export ledger organizer: Bytes<32>;
+
+// Bumped by reset(). Because the round is hashed into every nullifier, bumping
+// it rotates the whole set at once and makes the poll votable again.
+export ledger round: Counter;
+
+constructor() {
+  state = PollState.DRAFT;
+  question = none<Opaque<"string">>();
+  round.increment(1);
+}
+
+witness localSecretKey(): Bytes<32>;
+
+// Opens a poll. Callable from DRAFT (first use) or CLOSED (asking the group
+// something new), so one deployed contract serves an ongoing series of polls.
+export circuit open(newQuestion: Opaque<"string">): [] {
+  assert(state != PollState.OPEN, "A poll is already open");
+  organizer = disclose(organizerKey(localSecretKey(), round as Field as Bytes<32>));
+  question = disclose(some<Opaque<"string">>(newQuestion));
+  yesVotes.resetToDefault();
+  noVotes.resetToDefault();
+  state = PollState.OPEN;
+}
+
+// The privacy-critical circuit.
+//
+// `choice` is disclosed only as a increment to one of two public counters —
+// the ledger records that a Yes happened, never that *this voter* voted Yes.
+// The secret key is never disclosed in any form; only its nullifier is, and
+// that is a one-way hash.
+export circuit vote(choice: Boolean): [] {
+  assert(state == PollState.OPEN, "No poll is currently open");
+
+  const nul = disclose(voteNullifier(localSecretKey(), round as Field as Bytes<32>));
+  assert(!nullifiers.member(nul), "You have already voted in this poll");
+  nullifiers.insert(nul);
+
+  if (disclose(choice)) {
+    yesVotes.increment(1);
+  } else {
+    noVotes.increment(1);
+  }
+}
+
+// Organizer only. Freezes the tally; the nullifier set is left intact so the
+// record of "this many distinct people voted" survives.
+export circuit close(): [] {
+  assert(state == PollState.OPEN, "No poll is currently open");
+  assert(organizer == organizerKey(localSecretKey(), round as Field as Bytes<32>), "Only the organizer can close this poll");
+  state = PollState.CLOSED;
+}
+
+// Organizer only. Advances the round, which rotates every nullifier — everyone
+// becomes eligible to vote again — and clears the previous set and tallies.
+export circuit reset(): [] {
+  assert(state != PollState.OPEN, "Close the poll before resetting it");
+  assert(organizer == organizerKey(localSecretKey(), round as Field as Bytes<32>), "Only the organizer can reset this poll");
+  nullifiers.resetToDefault();
+  yesVotes.resetToDefault();
+  noVotes.resetToDefault();
+  question = none<Opaque<"string">>();
+  round.increment(1);
+  state = PollState.DRAFT;
+}
+
+// Both derivations below are one-way: given the output you cannot recover `sk`.
+// They are domain-separated from each other so the same key produces unrelated
+// values in the two roles — an organizer's public key can never be mistaken
+// for, or linked to, their vote nullifier.
+
+export circuit organizerKey(sk: Bytes<32>, round: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([pad(32, "quorum:org:"), round, sk]);
+}
+
+export circuit voteNullifier(sk: Bytes<32>, round: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([pad(32, "quorum:nul:"), round, sk]);
+}
