@@ -1,0 +1,36 @@
+$ compact compile src/quorum.compact ./src/managed/quorum
+
+Compiling 4 circuits:
+
+Circuits compiled to proving/verifying keys:
+  close        2826758 prover        2119 verifier
+  open         2826626 prover        2119 verifier
+  reset        2827222 prover        2119 verifier
+  vote         2827209 prover        2119 verifier
+
+Generated artifacts:
+  src/managed/quorum/compiler/contract-info.json
+  src/managed/quorum/contract/index.d.ts
+  src/managed/quorum/contract/index.js
+  src/managed/quorum/contract/index.js.map
+  src/managed/quorum/keys/close.prover
+  src/managed/quorum/keys/close.verifier
+  src/managed/quorum/keys/open.prover
+  src/managed/quorum/keys/open.verifier
+  src/managed/quorum/keys/reset.prover
+  src/managed/quorum/keys/reset.verifier
+  src/managed/quorum/keys/vote.prover
+  src/managed/quorum/keys/vote.verifier
+  src/managed/quorum/zkir/close.bzkir
+  src/managed/quorum/zkir/close.zkir
+  src/managed/quorum/zkir/open.bzkir
+  src/managed/quorum/zkir/open.zkir
+  src/managed/quorum/zkir/reset.bzkir
+  src/managed/quorum/zkir/reset.zkir
+  src/managed/quorum/zkir/vote.bzkir
+  src/managed/quorum/zkir/vote.zkir
+
+--
+compact CLI : compact 0.5.1
+compiler    : 0.31.1
+language    : language_version 0.23
