@@ -14,4 +14,5 @@
 // limitations under the License.
 
 export * from './Layout';
-export * from './Board';
+export * from './Poll';
+export * from './PrivacyPanel';

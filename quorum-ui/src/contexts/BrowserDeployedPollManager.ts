@@ -14,10 +14,11 @@
 // limitations under the License.
 
 import {
-  BBoardAPI,
-  type BBoardCircuitKeys,
-  type BBoardProviders,
-  type DeployedBBoardAPI,
+  QuorumAPI,
+  type PrivateStateId,
+  type QuorumCircuitKeys,
+  type QuorumProviders,
+  type DeployedQuorumAPI,
 } from '../../../api/src/index';
 import { type ContractAddress, fromHex, toHex } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import {
@@ -49,101 +50,133 @@ import {
   Transaction,
   TransactionId,
 } from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import { BBoardPrivateState } from '@midnight-ntwrk/bboard-contract';
+// Relative, like every other cross-workspace import here: the contract package
+// is a workspace sibling that is not published, so its bare name does not resolve.
+import { type QuorumPrivateState } from '../../../contract/src/index';
 import { inMemoryPrivateStateProvider } from '../in-memory-private-state-provider';
 import { NetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
-/**
- * An in-progress bulletin board deployment.
- */
-export interface InProgressBoardDeployment {
+/** A poll deployment that is being deployed or joined. */
+export interface InProgressPollDeployment {
   readonly status: 'in-progress';
 }
 
-/**
- * A deployed bulletin board deployment.
- */
-export interface DeployedBoardDeployment {
+/** A poll deployment that resolved to a live contract. */
+export interface DeployedPollDeployment {
   readonly status: 'deployed';
-
-  /**
-   * The {@link DeployedBBoardAPI} instance when connected to an on network bulletin board contract.
-   */
-  readonly api: DeployedBBoardAPI;
+  readonly api: DeployedQuorumAPI;
 }
 
-/**
- * A failed bulletin board deployment.
- */
-export interface FailedBoardDeployment {
+/** A poll deployment that failed to resolve. */
+export interface FailedPollDeployment {
   readonly status: 'failed';
-
-  /**
-   * The error that caused the deployment to fail.
-   */
   readonly error: Error;
 }
 
-/**
- * A bulletin board deployment.
- */
-export type BoardDeployment = InProgressBoardDeployment | DeployedBoardDeployment | FailedBoardDeployment;
+export type PollDeployment = InProgressPollDeployment | DeployedPollDeployment | FailedPollDeployment;
 
 /**
- * Provides access to bulletin board deployments.
+ * The state of the Lace wallet connection.
+ *
+ * @remarks
+ * Modelled explicitly rather than inferred from the presence of providers,
+ * because the UI has to distinguish "not connected yet" from "connecting" from
+ * "the user rejected the connection" — and because disconnect has to be able to
+ * put us back in `disconnected` deliberately.
  */
-export interface DeployedBoardAPIProvider {
-  /**
-   * Gets the observable set of board deployments.
-   *
-   * @remarks
-   * This property represents an observable array of {@link BoardDeployment}, each also an
-   * observable. Changes to the array will be emitted as boards are resolved (deployed or joined),
-   * while changes to each underlying board can be observed via each item in the array.
-   */
-  readonly boardDeployments$: Observable<Array<Observable<BoardDeployment>>>;
+export type WalletConnectionState =
+  | { readonly status: 'disconnected' }
+  | { readonly status: 'connecting' }
+  | { readonly status: 'connected'; readonly coinPublicKey: string }
+  | { readonly status: 'failed'; readonly error: Error };
+
+/** Provides access to Quorum poll deployments and the wallet they run through. */
+export interface DeployedPollAPIProvider {
+  readonly pollDeployments$: Observable<Array<Observable<PollDeployment>>>;
+  readonly walletState$: Observable<WalletConnectionState>;
+
+  /** Connects to the Lace wallet, building the provider set behind it. */
+  readonly connect: () => Promise<void>;
 
   /**
-   * Joins or deploys a bulletin board contract.
-   *
-   * @param contractAddress An optional contract address to use when resolving.
-   * @returns An observable board deployment.
+   * Drops the wallet connection and every deployment that ran through it.
    *
    * @remarks
-   * For a given `contractAddress`, the method will attempt to find and join the identified bulletin board
-   * contract; otherwise it will attempt to deploy a new one.
+   * The providers are cached deliberately (see `getProviders`), so disconnect
+   * has to evict that cache — otherwise a reconnect would silently reuse the
+   * previous wallet's keys and private state.
    */
-  readonly resolve: (contractAddress?: ContractAddress) => Observable<BoardDeployment>;
+  readonly disconnect: () => void;
+
+  readonly resolve: (contractAddress?: ContractAddress) => Observable<PollDeployment>;
 }
 
 /**
- * A {@link DeployedBoardAPIProvider} that manages bulletin board deployments in a browser setting.
+ * A {@link DeployedPollAPIProvider} that manages Quorum deployments in a browser.
  *
  * @remarks
- * {@link BrowserDeployedBoardManager} configures and manages a connection to the Midnight Lace
- * wallet, along with a collection of additional providers that work in a web-browser setting.
+ * Configures and manages a connection to the Midnight Lace wallet, along with
+ * the providers that only make sense in a web-browser setting.
  */
-export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
-  readonly #boardDeploymentsSubject: BehaviorSubject<Array<BehaviorSubject<BoardDeployment>>>;
-  #initializedProviders: Promise<BBoardProviders> | undefined;
+export class BrowserDeployedPollManager implements DeployedPollAPIProvider {
+  readonly #pollDeploymentsSubject: BehaviorSubject<Array<BehaviorSubject<PollDeployment>>>;
+  readonly #walletStateSubject: BehaviorSubject<WalletConnectionState>;
+  #initializedProviders: Promise<QuorumProviders> | undefined;
 
-  /**
-   * Initializes a new {@link BrowserDeployedBoardManager} instance.
-   *
-   * @param logger The `pino` logger to for logging.
-   */
   constructor(private readonly logger: Logger) {
-    this.#boardDeploymentsSubject = new BehaviorSubject<Array<BehaviorSubject<BoardDeployment>>>([]);
-    this.boardDeployments$ = this.#boardDeploymentsSubject;
+    this.#pollDeploymentsSubject = new BehaviorSubject<Array<BehaviorSubject<PollDeployment>>>([]);
+    this.pollDeployments$ = this.#pollDeploymentsSubject;
+    this.#walletStateSubject = new BehaviorSubject<WalletConnectionState>({ status: 'disconnected' });
+    this.walletState$ = this.#walletStateSubject;
   }
 
   /** @inheritdoc */
-  readonly boardDeployments$: Observable<Array<Observable<BoardDeployment>>>;
+  readonly pollDeployments$: Observable<Array<Observable<PollDeployment>>>;
 
   /** @inheritdoc */
-  resolve(contractAddress?: ContractAddress): Observable<BoardDeployment> {
-    const deployments = this.#boardDeploymentsSubject.value;
+  readonly walletState$: Observable<WalletConnectionState>;
+
+  /** @inheritdoc */
+  connect = async (): Promise<void> => {
+    if (this.#walletStateSubject.value.status === 'connecting') {
+      return;
+    }
+
+    this.#walletStateSubject.next({ status: 'connecting' });
+    try {
+      const providers = await this.getProviders();
+      this.#walletStateSubject.next({
+        status: 'connected',
+        coinPublicKey: providers.walletProvider.getCoinPublicKey(),
+      });
+    } catch (error: unknown) {
+      // Evict the rejected promise, or every later retry would await the same failure.
+      this.#initializedProviders = undefined;
+      this.#walletStateSubject.next({
+        status: 'failed',
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  };
+
+  /** @inheritdoc */
+  disconnect = (): void => {
+    this.#initializedProviders = undefined;
+    // Deployments hold an API bound to the old providers, so they go too. The
+    // private state lived in memory only, so dropping it drops the secret key
+    // as well — a disconnect really does forget the voting identity.
+    for (const deployment of this.#pollDeploymentsSubject.value) {
+      deployment.complete();
+    }
+    this.#pollDeploymentsSubject.next([]);
+    this.#walletStateSubject.next({ status: 'disconnected' });
+    this.logger.info('Disconnected from wallet; cleared providers and deployments');
+  };
+
+  /** @inheritdoc */
+  resolve(contractAddress?: ContractAddress): Observable<PollDeployment> {
+    const deployments = this.#pollDeploymentsSubject.value;
     let deployment = deployments.find(
       (deployment) =>
         deployment.value.status === 'deployed' && deployment.value.api.deployedContractAddress === contractAddress,
@@ -153,7 +186,7 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
       return deployment;
     }
 
-    deployment = new BehaviorSubject<BoardDeployment>({
+    deployment = new BehaviorSubject<PollDeployment>({
       status: 'in-progress',
     });
 
@@ -163,12 +196,12 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
       void this.deployDeployment(deployment);
     }
 
-    this.#boardDeploymentsSubject.next([...deployments, deployment]);
+    this.#pollDeploymentsSubject.next([...deployments, deployment]);
 
     return deployment;
   }
 
-  private getProviders(): Promise<BBoardProviders> {
+  private getProviders(): Promise<QuorumProviders> {
     // We use a cached `Promise` to hold the providers. This will:
     //
     // 1. Cache and re-use the providers (including the configured connector API), and
@@ -178,15 +211,12 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
     return this.#initializedProviders ?? (this.#initializedProviders = initializeProviders(this.logger));
   }
 
-  private async deployDeployment(deployment: BehaviorSubject<BoardDeployment>): Promise<void> {
+  private async deployDeployment(deployment: BehaviorSubject<PollDeployment>): Promise<void> {
     try {
       const providers = await this.getProviders();
-      const api = await BBoardAPI.deploy(providers, this.logger);
+      const api = await QuorumAPI.deploy(providers, this.logger);
 
-      deployment.next({
-        status: 'deployed',
-        api,
-      });
+      deployment.next({ status: 'deployed', api });
     } catch (error: unknown) {
       deployment.next({
         status: 'failed',
@@ -196,17 +226,14 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
   }
 
   private async joinDeployment(
-    deployment: BehaviorSubject<BoardDeployment>,
+    deployment: BehaviorSubject<PollDeployment>,
     contractAddress: ContractAddress,
   ): Promise<void> {
     try {
       const providers = await this.getProviders();
-      const api = await BBoardAPI.join(providers, contractAddress, this.logger);
+      const api = await QuorumAPI.join(providers, contractAddress, this.logger);
 
-      deployment.next({
-        status: 'deployed',
-        api,
-      });
+      deployment.next({ status: 'deployed', api });
     } catch (error: unknown) {
       deployment.next({
         status: 'failed',
@@ -215,18 +242,22 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
     }
   }
 }
-
 /** @internal */
-const initializeProviders = async (logger: Logger): Promise<BBoardProviders> => {
+const initializeProviders = async (logger: Logger): Promise<QuorumProviders> => {
   const networkId = import.meta.env.VITE_NETWORK_ID as NetworkId;
   const connectedAPI = await connectToWallet(logger, networkId);
-  const zkConfigPath = window.location.origin; // '../../../contract/src/managed/bboard';
-  const keyMaterialProvider = new FetchZkConfigProvider<BBoardCircuitKeys>(zkConfigPath, fetch.bind(window));
+  const zkConfigPath = window.location.origin;
+  const keyMaterialProvider = new FetchZkConfigProvider<QuorumCircuitKeys>(zkConfigPath, fetch.bind(window));
   const config = await connectedAPI.getConfiguration();
-  const inMemoryBBoardPrivateStateProvider = inMemoryPrivateStateProvider<string, BBoardPrivateState>();
+  // In-memory, and deliberately so: the secret key that derives this user's
+  // nullifier lives here and nowhere else. Closing the tab forgets it. Keyed by
+  // the literal `PrivateStateId` rather than `string`, because the provider set
+  // is typed against that literal and widening it here made the assignment
+  // unsound.
+  const privateStateProvider = inMemoryPrivateStateProvider<PrivateStateId, QuorumPrivateState>();
   const shieldedAddresses = await connectedAPI.getShieldedAddresses();
   return {
-    privateStateProvider: inMemoryBBoardPrivateStateProvider,
+    privateStateProvider,
     zkConfigProvider: keyMaterialProvider,
     proofProvider: httpClientProofProvider(config.proverServerUri!, keyMaterialProvider),
     publicDataProvider: indexerPublicDataProvider(config.indexerUri, config.indexerWsUri),
@@ -310,7 +341,7 @@ const connectToWallet = (logger: Logger, networkId: string): Promise<ConnectedAP
         return connectedAPI;
       }),
       timeout({
-        first: 5_000,
+        first: 60_000,
         with: () =>
           throwError(() => {
             logger.error('Wallet connector API has failed to respond');

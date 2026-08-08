@@ -15,42 +15,45 @@
 
 import React, { useEffect, useState } from 'react';
 import { Box } from '@mui/material';
-import { MainLayout, Board } from './components';
-import { useDeployedBoardContext } from './hooks';
-import { type BoardDeployment } from './contexts';
+import { MainLayout, Poll } from './components';
+import { useDeployedPollContext, useWalletConnection } from './hooks';
+import { type PollDeployment } from './contexts';
 import { type Observable } from 'rxjs';
 
 /**
- * The root bulletin board application component.
+ * The root Quorum application component.
  *
  * @remarks
- * The {@link App} component requires a `<DeployedBoardProvider />` parent in order to retrieve
- * information about current bulletin board deployments.
+ * Requires a `<DeployedPollProvider />` parent in order to retrieve information
+ * about current poll deployments. The wallet connection is read here as well as
+ * in the header, because a poll cannot call a circuit without one and the
+ * buttons should say so rather than failing on click.
  *
  * @internal
  */
 const App: React.FC = () => {
-  const boardApiProvider = useDeployedBoardContext();
-  const [boardDeployments, setBoardDeployments] = useState<Array<Observable<BoardDeployment>>>([]);
+  const pollApiProvider = useDeployedPollContext();
+  const { isConnected } = useWalletConnection();
+  const [pollDeployments, setPollDeployments] = useState<Array<Observable<PollDeployment>>>([]);
 
   useEffect(() => {
-    const subscription = boardApiProvider.boardDeployments$.subscribe(setBoardDeployments);
+    const subscription = pollApiProvider.pollDeployments$.subscribe(setPollDeployments);
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [boardApiProvider]);
+  }, [pollApiProvider]);
 
   return (
     <Box sx={{ background: '#000', minHeight: '100vh' }}>
       <MainLayout>
-        {boardDeployments.map((boardDeployment, idx) => (
-          <div data-testid={`board-${idx}`} key={`board-${idx}`}>
-            <Board boardDeployment$={boardDeployment} />
+        {pollDeployments.map((pollDeployment, idx) => (
+          <div data-testid={`poll-${idx}`} key={`poll-${idx}`}>
+            <Poll pollDeployment$={pollDeployment} isWalletConnected={isConnected} />
           </div>
         ))}
-        <div data-testid="board-start">
-          <Board />
+        <div data-testid="poll-start">
+          <Poll isWalletConnected={isConnected} />
         </div>
       </MainLayout>
     </Box>

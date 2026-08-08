@@ -14,20 +14,20 @@
 // limitations under the License.
 
 import { useContext } from 'react';
-import { DeployedBoardContext, type DeployedBoardAPIProvider } from '../contexts';
+import { DeployedPollContext, type DeployedPollAPIProvider } from '../contexts';
 
 /**
- * Retrieves the currently in-scope deployed boards provider.
+ * Retrieves the currently in-scope deployed polls provider.
  *
- * @returns The currently in-scope {@link DeployedBBoardAPIProvider} implementation.
+ * @returns The currently in-scope {@link DeployedPollAPIProvider} implementation.
  *
  * @internal
  */
-export const useDeployedBoardContext = (): DeployedBoardAPIProvider => {
-  const context = useContext(DeployedBoardContext);
+export const useDeployedPollContext = (): DeployedPollAPIProvider => {
+  const context = useContext(DeployedPollContext);
 
   if (!context) {
-    throw new Error('A <DeployedBoardProvider /> is required.');
+    throw new Error('A <DeployedPollProvider /> is required.');
   }
 
   return context;

@@ -18,7 +18,7 @@ import { Box } from '@mui/material';
 import { Header } from './Header';
 
 /**
- * Provides layout for the bulletin board application.
+ * Provides layout for the Quorum application.
  */
 export const MainLayout: React.FC<React.PropsWithChildren> = ({ children }) => {
   return (
