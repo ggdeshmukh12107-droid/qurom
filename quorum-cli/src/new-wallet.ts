@@ -18,19 +18,27 @@ import { writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import * as Rx from 'rxjs';
 
-const NETWORK = 'preprod';
+// Network is a flag:  npm run new-wallet -- preview
+// The seed is network-agnostic; only the address encoding differs, so pointing
+// this at another network re-derives the address for the SAME key rather than
+// stranding funds under the old one.
+const requestedNetwork = (process.argv[2] ?? process.env.QUORUM_NETWORK ?? 'preview').toLowerCase();
+if (requestedNetwork !== 'preview' && requestedNetwork !== 'preprod') {
+  throw new Error(`Unknown network '${requestedNetwork}'. Use 'preview' or 'preprod'.`);
+}
+const NETWORK: 'preview' | 'preprod' = requestedNetwork;
 
-// Mirrors PreprodTestEnvironment.getEnvironmentConfiguration() in ./config.ts.
-// proofServer is a placeholder: deriving an address needs no proving, and the
-// wallet is never started here.
+// Mirrors the matching TestEnvironment.getEnvironmentConfiguration() in
+// ./config.ts. proofServer is a placeholder: deriving an address needs no
+// proving, and the wallet is never started here.
 const environment: EnvironmentConfiguration = {
   walletNetworkId: NETWORK,
   networkId: NETWORK,
-  indexer: 'https://indexer.preprod.midnight.network/api/v4/graphql',
-  indexerWS: 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws',
-  node: 'https://rpc.preprod.midnight.network',
-  nodeWS: 'wss://rpc.preprod.midnight.network',
-  faucet: 'https://midnight-tmnight-preprod.nethermind.dev/',
+  indexer: `https://indexer.${NETWORK}.midnight.network/api/v4/graphql`,
+  indexerWS: `wss://indexer.${NETWORK}.midnight.network/api/v4/graphql/ws`,
+  node: `https://rpc.${NETWORK}.midnight.network`,
+  nodeWS: `wss://rpc.${NETWORK}.midnight.network`,
+  faucet: `https://midnight-tmnight-${NETWORK}.nethermind.dev/`,
   proofServer: 'http://127.0.0.1:6300',
 };
 

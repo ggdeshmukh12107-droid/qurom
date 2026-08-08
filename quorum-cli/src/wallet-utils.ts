@@ -56,43 +56,48 @@ const isFacadeStateSynced = (state: FacadeState): boolean =>
   isProgressStrictlyComplete(state.dust.state.progress) &&
   isProgressStrictlyComplete(state.unshielded.progress);
 
-export const syncWallet = (logger: Logger, wallet: WalletFacade, throttleTime = 2_000) => {
+/**
+ * A one-line, human-readable sync summary. Logged at INFO on purpose: these
+ * waits can run for minutes, and a silent process is indistinguishable from a
+ * hung one.
+ */
+const describeProgress = (state: FacadeState): string => {
+  const shielded = isProgressStrictlyComplete(state.shielded.state.progress);
+  const unshielded = isProgressStrictlyComplete(state.unshielded.progress);
+  const dust = isProgressStrictlyComplete(state.dust.state.progress);
+  return `shielded=${shielded} unshielded=${unshielded} dust=${dust}`;
+};
+
+export const syncWallet = (logger: Logger, wallet: WalletFacade, throttleTime = 2_000, timeoutMs = 300_000) => {
   logger.info('Syncing wallet...');
 
-  return Rx.firstValueFrom(
-    wallet.state().pipe(
-      Rx.tap((state: FacadeState) => {
-        const shieldedSynced = isProgressStrictlyComplete(state.shielded.state.progress);
-        const unshieldedSynced = isProgressStrictlyComplete(state.unshielded.progress);
-        const dustSynced = isProgressStrictlyComplete(state.dust.state.progress);
-        logger.debug(
-          `Wallet synced state emission: { shielded=${shieldedSynced}, unshielded=${unshieldedSynced}, dust=${dustSynced} }`,
-        );
-      }),
-      Rx.throttleTime(throttleTime),
-      Rx.tap((state: FacadeState) => {
-        const shieldedSynced = isProgressStrictlyComplete(state.shielded.state.progress);
-        const unshieldedSynced = isProgressStrictlyComplete(state.unshielded.progress);
-        const dustSynced = isProgressStrictlyComplete(state.dust.state.progress);
-        const isSynced = shieldedSynced && dustSynced && unshieldedSynced;
+  const synced = wallet.state().pipe(
+    Rx.throttleTime(throttleTime),
+    Rx.tap((state: FacadeState) => {
+      logger.info(`Sync progress: ${describeProgress(state)}`);
+    }),
+    Rx.filter((state: FacadeState) => isFacadeStateSynced(state)),
+    Rx.tap(() => logger.info('Sync complete')),
+    Rx.tap((state: FacadeState) => {
+      const shieldedBalances = state.shielded.balances || {};
+      const unshieldedBalances = state.unshielded.balances || {};
+      const dustBalances = state.dust.balance(new Date(Date.now())) || 0n;
 
-        logger.debug(
-          `Wallet synced state emission (synced=${isSynced}): { shielded=${shieldedSynced}, unshielded=${unshieldedSynced}, dust=${dustSynced} }`,
-        );
-      }),
-      Rx.filter((state: FacadeState) => isFacadeStateSynced(state)),
-      Rx.tap(() => logger.info('Sync complete')),
-      Rx.tap((state: FacadeState) => {
-        const shieldedBalances = state.shielded.balances || {};
-        const unshieldedBalances = state.unshielded.balances || {};
-        const dustBalances = state.dust.balance(new Date(Date.now())) || 0n;
-
-        logger.info(
-          `Wallet balances after sync - Shielded: ${JSON.stringify(shieldedBalances)}, Unshielded: ${JSON.stringify(unshieldedBalances)}, Dust: ${dustBalances}`,
-        );
-      }),
-    ),
+      logger.info(
+        `Wallet balances after sync - Shielded: ${JSON.stringify(shieldedBalances)}, Unshielded: ${JSON.stringify(unshieldedBalances)}, Dust: ${dustBalances}`,
+      );
+    }),
   );
+
+  // Strict sync can stay false indefinitely on a public network. Falling back
+  // to the latest state keeps a deploy moving instead of hanging silently; the
+  // caller's own balance checks decide whether that state is good enough.
+  const fallback = Rx.timer(timeoutMs).pipe(
+    Rx.tap(() => logger.warn(`Wallet did not report strict sync within ${timeoutMs / 1000}s; using latest state.`)),
+    Rx.switchMap(() => wallet.state().pipe(Rx.take(1))),
+  );
+
+  return Rx.firstValueFrom(Rx.race(synced, fallback));
 };
 
 export const waitForUnshieldedFunds = async (
@@ -102,6 +107,7 @@ export const waitForUnshieldedFunds = async (
   tokenType: UnshieldedTokenType,
   fundFromFaucet = false,
   throttleTime = 2_000,
+  fundsTimeoutMs = 600_000,
 ): Promise<UnshieldedWalletState> => {
   const initialState = await getInitialUnshieldedState(logger, wallet.unshielded);
   const unshieldedAddress = UnshieldedAddress.codec.encode(getNetworkId(), initialState.address);
@@ -123,31 +129,38 @@ export const waitForUnshieldedFunds = async (
     }
     logger.info(`Your wallet initial balance is: 0 (not yet initialized)`);
     logger.info(`Waiting to receive tokens...`);
-    return Rx.firstValueFrom(
+    // Gate on the balance alone, not on strict whole-facade sync. Requiring
+    // shielded+dust+unshielded to all report strictly complete meant a wallet
+    // that had visibly received its NIGHT still waited forever, because the
+    // dust sub-wallet never flipped. The balance is what the caller needs.
+    const funded = await Rx.firstValueFrom(
       wallet.state().pipe(
+        Rx.throttleTime(throttleTime),
         Rx.tap((state: FacadeState) => {
           const balance = state.unshielded.balances[tokenType.raw] ?? 0n;
-          logger.debug(
-            `Wallet funds state emission: { synced=${isFacadeStateSynced(state)}, balance=${balance.toString()} }`,
-          );
+          logger.info(`Waiting for funds: balance=${balance.toString()} ${describeProgress(state)}`);
         }),
-        Rx.throttleTime(throttleTime),
-        Rx.filter(
-          (state: FacadeState) => isFacadeStateSynced(state) && (state.unshielded.balances[tokenType.raw] ?? 0n) > 0n,
-        ),
-        Rx.tap(() => logger.info('Sync complete')),
+        Rx.filter((state: FacadeState) => (state.unshielded.balances[tokenType.raw] ?? 0n) > 0n),
         Rx.tap((state: FacadeState) => {
-          const shieldedBalances = state.shielded.balances || {};
           const unshieldedBalances = state.unshielded.balances || {};
           const dustBalances = state.dust.balance(new Date(Date.now())) || 0n;
-
-          logger.info(
-            `Wallet balances after sync - Shielded: ${JSON.stringify(shieldedBalances)}, Unshielded: ${JSON.stringify(unshieldedBalances)}, Dust: ${dustBalances}`,
-          );
+          logger.info(`Funds received - Unshielded: ${JSON.stringify(unshieldedBalances)}, Dust: ${dustBalances}`);
         }),
         Rx.map((state: FacadeState) => state.unshielded),
+        Rx.timeout({
+          first: fundsTimeoutMs,
+          with: () =>
+            Rx.throwError(
+              () =>
+                new Error(
+                  `No tNIGHT arrived at ${unshieldedAddress.toString()} within ${fundsTimeoutMs / 1000}s. ` +
+                    `Fund that address and re-run.`,
+                ),
+            ),
+        }),
       ),
     );
+    return funded;
   }
   return initialState;
 };
